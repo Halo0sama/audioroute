@@ -43,6 +43,13 @@ class AudioForceService : IAudioForceService.Stub {
         return false
     }
 
+    override fun forceUse(usage: Int): Int {
+        val m = Class.forName("android.media.AudioSystem").methods
+            .firstOrNull { it.name == "getForceUse" && it.parameterTypes.size == 1 }
+            ?: throw IllegalStateException("no AudioSystem.getForceUse")
+        return m.invoke(null, usage) as Int
+    }
+
     override fun lastResult(): String = lastResultValue
 
     companion object {
