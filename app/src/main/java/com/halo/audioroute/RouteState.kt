@@ -1,6 +1,8 @@
 package com.halo.audioroute
 
+import android.content.ComponentName
 import android.content.Context
+import android.content.ServiceConnection
 import android.content.SharedPreferences
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
@@ -8,6 +10,8 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaPlayer
 import android.media.MediaRecorder
+import rikka.shizuku.Shizuku
+import rikka.shizuku.ShizukuBinderWrapper
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.math.max
@@ -39,6 +43,33 @@ object RouteState {
 
     @Volatile var forceService: IAudioForceService? = null
     @Volatile var lastForceError: String = ""
+    @Volatile var bindError: String = ""
+
+    // Application 级 ServiceConnection：与进程同寿，不受 Activity 重建影响
+    private val shizukuConn = object : android.content.ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: android.os.IBinder?) {
+            if (binder != null && binder.pingBinder()) {
+                forceService = IAudioForceService.Stub.asInterface(ShizukuBinderWrapper(binder))
+                bindError = ""
+            }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            forceService = null
+        }
+    }
+
+    fun bindShizuku(context: Context) {
+        init(context)
+        val args = Shizuku.UserServiceArgs(
+            android.content.ComponentName(context, AudioForceService::class.java)
+        ).processNameSuffix("audioroute").version(1)
+        runCatching {
+            Shizuku.bindUserService(args, shizukuConn)
+        }.onFailure {
+            bindError = it.message ?: "bind failed"
+        }
+    }
 
     fun init(context: Context) {
         if (appContext == null) {
@@ -173,16 +204,27 @@ object RouteState {
 
     fun shizukuConnected(): Boolean = forceService != null
 
+    fun serviceConnected(): Boolean = forceService != null
+
+    // 最近一次已知的 force 状态缓存（status 查询读缓存，绝不触发可能挂起的 binder 调用）
+    @Volatile private var knownForce = mutableMapOf<Int, Int>()
+
     fun setForceUse(usage: Int, force: Int): Pair<Boolean, String> {
         val svc = forceService ?: return false to "Shizuku 服务未连接"
-        return runCatching {
-            val ok = svc.setForceUse(usage, force)
-            ok to svc.lastResult()
-        }.getOrElse { false to "err: ${it.message}" }
+        // binder 调用可能因 user service 进程被杀而无限挂起：独立线程 + 看门狗，
+        // 超时则丢弃旧 binder（下次 bind 自动恢复），绝不让 HTTP 处理线程卡死
+        val result = arrayOf(false to "调用超时（请重启声路后重试）")
+        val t = Thread {
+            runCatching {
+                val ok = svc.setForceUse(usage, force)
+                result[0] = ok to svc.lastResult()
+            }.onFailure { result[0] = false to "err: ${it.message}" }
+        }
+        t.start()
+        t.join(8000)
+        if (t.isAlive) forceService = null else synchronized(knownForce) { knownForce[usage] = force }
+        return result[0]
     }
 
-    fun getForceUse(usage: Int): Int? {
-        val svc = forceService ?: return null
-        return runCatching { svc.forceUse(usage) }.getOrNull()
-    }
+    fun getForceUse(usage: Int): Int? = synchronized(knownForce) { knownForce[usage] }
 }

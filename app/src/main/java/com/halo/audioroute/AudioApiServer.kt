@@ -48,21 +48,21 @@ class AudioApiServer(private val context: Context) : NanoHTTPD("127.0.0.1", Rout
                     JSONObject().put("ok", true).put("kind", kind)
                 }
                 uri == "/api/global" && session.method == Method.POST -> {
+                    // 异步 fire-and-forget：binder 调用可能挂起，绝不让 HTTP 层阻塞
                     val b = JSONObject(body(session))
-                    val out = JSONObject()
-                    b.optString("media", "").takeIf { it.isNotBlank() }?.let {
-                        val force = mapOf("none" to RouteState.FORCE_NONE, "speaker" to RouteState.FORCE_SPEAKER, "bt_a2dp" to RouteState.FORCE_BT_A2DP)[it]
-                            ?: throw IllegalArgumentException("bad media force")
-                        val (ok, msg) = RouteState.setForceUse(RouteState.FOR_MEDIA, force)
-                        out.put("media", JSONObject().put("ok", ok).put("detail", msg))
+                    val media = b.optString("media", "")
+                    val record = b.optString("record", "")
+                    scope.launch {
+                        media.takeIf { it.isNotBlank() }?.let {
+                            val force = mapOf("none" to RouteState.FORCE_NONE, "speaker" to RouteState.FORCE_SPEAKER, "bt_a2dp" to RouteState.FORCE_BT_A2DP)[it]
+                            if (force != null) RouteState.setForceUse(RouteState.FOR_MEDIA, force)
+                        }
+                        record.takeIf { it.isNotBlank() }?.let {
+                            val force = mapOf("none" to RouteState.FORCE_NONE, "bt_sco" to RouteState.FORCE_BT_SCO)[it]
+                            if (force != null) RouteState.setForceUse(RouteState.FOR_RECORD, force)
+                        }
                     }
-                    b.optString("record", "").takeIf { it.isNotBlank() }?.let {
-                        val force = mapOf("none" to RouteState.FORCE_NONE, "bt_sco" to RouteState.FORCE_BT_SCO)[it]
-                            ?: throw IllegalArgumentException("bad record force")
-                        val (ok, msg) = RouteState.setForceUse(RouteState.FOR_RECORD, force)
-                        out.put("record", JSONObject().put("ok", ok).put("detail", msg))
-                    }
-                    out.put("force", forceJson())
+                    JSONObject().put("ok", true).put("async", true)
                 }
                 uri == "/api/call" && session.method == Method.POST -> {
                     val speaker = JSONObject(body(session)).optBoolean("speaker", false)

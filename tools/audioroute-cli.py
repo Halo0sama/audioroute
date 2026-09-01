@@ -17,6 +17,7 @@
 import argparse
 import json
 import subprocess
+import time
 import sys
 import urllib.request
 
@@ -34,19 +35,38 @@ def adb(serial, *args):
         sys.exit(f"adb 失败: {err[:200]}")
 
 
+def ensure_forward(serial):
+    # 只在转发不存在时建立：反复重建会把活跃连接打进黑洞
+    out = subprocess.run(["adb", "-s", serial, "forward", "--list"],
+                         capture_output=True, text=True).stdout
+    if f"tcp:{PORT}" not in out:
+        adb(serial, "forward", f"tcp:{PORT}", f"tcp:{PORT}")
+
+
+def http(serial, path, body=None, tries=2):
+    ensure_forward(serial)
+    last_err = None
+    for attempt in range(tries):
+        try:
+            if body is None:
+                req = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}")
+            else:
+                req = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}",
+                                             data=json.dumps(body).encode(),
+                                             headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return json.loads(r.read())
+        except Exception as e:
+            last_err = e
+    sys.exit(f"请求失败（{last_err}）；App 是否在前台运行？可尝试重启声路")
+
+
 def get(serial, path):
-    adb(serial, "forward", f"tcp:{PORT}", f"tcp:{PORT}")
-    with urllib.request.urlopen(f"http://127.0.0.1:{PORT}{path}", timeout=20) as r:
-        return json.loads(r.read())
+    return http(serial, path)
 
 
 def post(serial, path, body):
-    adb(serial, "forward", f"tcp:{PORT}", f"tcp:{PORT}")
-    data = json.dumps(body).encode()
-    req = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}", data=data,
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read())
+    return http(serial, path, body)
 
 
 def pick_serial():
@@ -99,12 +119,14 @@ def main():
         print(json.dumps(post(serial, "/api/test", {"kind": args.kind}), ensure_ascii=False))
     elif args.cmd == "media":
         r = post(serial, "/api/global", {"media": args.force})
-        print("媒体强制路由:", json.dumps(r.get("media", r), ensure_ascii=False))
-        print("当前 force:", json.dumps(r.get("force", {})))
+        time.sleep(2)
+        s = get(serial, "/api/status")
+        print(f"媒体强制路由 → {args.force} | 当前 force.media = {s['force'].get('media')}")
     elif args.cmd == "record":
         r = post(serial, "/api/global", {"record": args.force})
-        print("录音强制路由:", json.dumps(r.get("record", r), ensure_ascii=False))
-        print("当前 force:", json.dumps(r.get("force", {})))
+        time.sleep(2)
+        s = get(serial, "/api/status")
+        print(f"录音强制路由 → {args.force} | 当前 force.record = {s['force'].get('record')}")
     elif args.cmd == "call":
         print(json.dumps(post(serial, "/api/call", {"speaker": args.mode == "on"}), ensure_ascii=False))
     elif args.cmd == "shizuku":

@@ -79,10 +79,14 @@ class MainActivity : ComponentActivity() {
         RouteState.init(this)
         Shizuku.addRequestPermissionResultListener { requestCode, grantResult ->
             if (requestCode == SHIZUKU_REQ && grantResult == PackageManager.PERMISSION_GRANTED) {
-                ForceRouter.bind(this)
+                RouteState.bindShizuku(applicationContext)
             }
         }
-        ForceRouter.bind(this)
+        // server 的 binder 推送常晚于本进程的首次 bind 尝试：收到推送时必须重新绑定
+        Shizuku.addBinderReceivedListener {
+            RouteState.bindShizuku(applicationContext)
+        }
+        RouteState.bindShizuku(applicationContext)
         ApiServerHolder.start(this)
         setContent { App() }
     }
@@ -90,47 +94,11 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
-            ForceRouter.bind(this)
+            RouteState.bindShizuku(applicationContext)
         }
     }
 }
 
-object ForceRouter {
-    @Volatile var service: IAudioForceService? = null
-    @Volatile var bindError: String = ""
-
-    fun bind(activity: MainActivity) {
-        val args = Shizuku.UserServiceArgs(ComponentName(activity, AudioForceService::class.java))
-            .processNameSuffix("audioroute")
-            .version(1)
-        runCatching {
-            Shizuku.bindUserService(args, object : android.content.ServiceConnection {
-                override fun onServiceConnected(name: ComponentName?, binder: android.os.IBinder?) {
-                    if (binder != null && binder.pingBinder()) {
-                        service = IAudioForceService.Stub.asInterface(ShizukuBinderWrapper(binder))
-                        bindError = ""
-                    }
-                }
-
-                override fun onServiceDisconnected(name: ComponentName?) {
-                    service = null
-                }
-            })
-        }.onFailure {
-            bindError = it.message ?: "bind failed"
-        }
-    }
-
-    fun force(usage: Int, force: Int): Pair<Boolean, String> {
-        val svc = service ?: return false to "Shizuku 服务未连接"
-        return runCatching {
-            val ok = svc.setForceUse(usage, force)
-            ok to svc.lastResult()
-        }.getOrElse { false to "err: ${it.message}" }
-    }
-
-    fun forceUse(usage: Int): Int? = runCatching { service?.forceUse(usage) }.getOrNull()
-}
 
 object ApiServerHolder {
     @Volatile private var server: AudioApiServer? = null
@@ -165,7 +133,7 @@ private fun App() {
                         }
                     },
                     actions = {
-                        val ok = ForceRouter.service != null
+                        val ok = RouteState.serviceConnected()
                         Text(
                             if (ok) "Shizuku 已连接" else "Shizuku 未连接",
                             fontSize = 12.sp,
@@ -249,7 +217,7 @@ private fun DeviceRow(name: String, icon: ImageVector, selected: Boolean, onClic
 @Composable
 private fun ShizukuCard() {
     val context = LocalContext.current
-    val connected = ForceRouter.service != null
+    val connected = RouteState.serviceConnected()
     SectionCard(
         "Shizuku",
         "全局路由需要 Shizuku（无线调试/ADB 启动）。应用商店或 GitHub RikkaApps/Shizuku 获取"
@@ -262,9 +230,8 @@ private fun ShizukuCard() {
                 fontWeight = FontWeight.Bold
             )
             TextButton(onClick = {
-                val act = context as? MainActivity ?: return@TextButton
-                Shizuku.requestPermission(7001)
-                ForceRouter.bind(act)
+                runCatching { Shizuku.requestPermission(7001) }
+                    .onFailure { RouteState.bindShizuku(context.applicationContext) }
             }) { Text("连接 / 授权") }
         }
     }
@@ -336,7 +303,7 @@ private fun GlobalCard() {
 
     fun doForce(usage: Int, force: Int, label: String) {
         scope.launch {
-            val (ok, msg) = withContext(Dispatchers.IO) { ForceRouter.force(usage, force) }
+            val (ok, msg) = withContext(Dispatchers.IO) { RouteState.setForceUse(usage, force) }
             status = "$label：${if (ok) "✓ 已生效" else "✗ $msg"}"
         }
     }
