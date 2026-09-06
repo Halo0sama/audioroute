@@ -45,17 +45,22 @@ object RouteState {
     @Volatile var lastForceError: String = ""
     @Volatile var bindError: String = ""
 
+    // Compose 可观察的连接状态：UI 订阅后自动刷新（此前 UI 是静态快照，绑定成功也不刷新）
+    val connectedState = androidx.compose.runtime.mutableStateOf(false)
+
     // Application 级 ServiceConnection：与进程同寿，不受 Activity 重建影响
     private val shizukuConn = object : android.content.ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: android.os.IBinder?) {
             if (binder != null && binder.pingBinder()) {
                 forceService = IAudioForceService.Stub.asInterface(ShizukuBinderWrapper(binder))
                 bindError = ""
+                connectedState.value = true
             }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
             forceService = null
+            connectedState.value = false
         }
     }
 

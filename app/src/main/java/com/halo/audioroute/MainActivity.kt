@@ -133,7 +133,7 @@ private fun App() {
                         }
                     },
                     actions = {
-                        val ok = RouteState.serviceConnected()
+                        val ok = RouteState.connectedState.value
                         Text(
                             if (ok) "Shizuku 已连接" else "Shizuku 未连接",
                             fontSize = 12.sp,
@@ -217,7 +217,8 @@ private fun DeviceRow(name: String, icon: ImageVector, selected: Boolean, onClic
 @Composable
 private fun ShizukuCard() {
     val context = LocalContext.current
-    val connected = RouteState.serviceConnected()
+    val connected = RouteState.connectedState.value
+    val bindError = RouteState.bindError
     SectionCard(
         "Shizuku",
         "全局路由需要 Shizuku（无线调试/ADB 启动）。应用商店或 GitHub RikkaApps/Shizuku 获取"
