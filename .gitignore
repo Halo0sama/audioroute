@@ -3,3 +3,5 @@ build/
 local.properties
 *.apk
 .DS_Store
+artifacts/
+__pycache__/

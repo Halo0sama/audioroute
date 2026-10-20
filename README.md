@@ -1,75 +1,90 @@
 # 声路 · 音频路由（AudioRoute）
 
-一款 Android 全局音频路由工具：手动选择**录音输入**与**播放输出**设备，并可通过 [Shizuku](https://shizuku.rikka.app/) 在**系统层面强制全局路由**——让所有 App 的媒体声音走扬声器或蓝牙耳机、让录音走指定麦克风，而不需要 root。
+Android 音频设备选择与路由诊断工具，无需 root。使用 Material 3 动态取色界面，可通过 Shizuku 请求系统级音频策略，也可通过 Python CLI 经 adb 控制。
 
-适合的场景：蓝牙耳机麦克风收音质量差、想"手机麦收音 + 耳机出声"、想强制某 App 的声音走指定输出设备，以及需要在电脑上远程控制手机音频路由的自动化玩法。
+## 下载
 
-## 功能
+[v1.2.3 发布页与 APK](https://github.com/Halo0sama/audioroute/releases/tag/v1.2.3) · [更新记录](CHANGELOG.md)
 
-- **设备枚举**：动态列出系统输入/输出音频设备，显示系统原始名称（如 `MOONDROP littlewhite`），支持蓝牙（A2DP / SCO）、有线、USB、内置设备
-- **本 App 试音**：按选中输入录 4 秒并回放到选中输出；播放测试音——先验证再使用
-- **全局强制路由（需 Shizuku）**：
-  - 媒体输出 → 强制扬声器 / 强制蓝牙耳机（A2DP）/ 恢复自动
-  - 录音输入 → 强制蓝牙麦克风（SCO）/ 恢复自动
-  - 经 `AudioSystem.setForceUse` 在 AudioPolicyManager 层生效，影响**所有 App**
-- **通话路由（免 Shizuku）**：通话 / 微信语音一键切扬声器
-- **Material 3 动态取色 UI**（Android 12+ 莫奈取色，随壁纸变色）
-- **本地控制服务器 + CLI**：App 启动后监听 `127.0.0.1:8767`，配套 Python CLI 可经 adb 远程控制全部功能，方便自动化与脚本集成
+当前下载包为真机验证过的 **debug 构建、调试签名版本**，与本次开发安装使用同一签名；尚未提供正式发布签名包。安装后请启动并授权 Shizuku，再在“声音输出”中切换媒体设备。
 
-## 全局路由的原理与边界
+## 功能与边界
 
-- 原理：Shizuku 以 shell 权限（UID 2000）运行 App 提供的 UserService，反射调用隐藏 API `android.media.AudioSystem.setForceUse(usage, force)`，在系统音频策略层覆盖默认路由
-- forceUse 是**设备类别级**强制（扬声器/蓝牙/有线），不能精确到某一个具体设备
-- 路由状态在**设备插拔或重启后会被系统重置**，需要重新应用
-- Shizuku server 重启手机后需重新启动一次（无线调试或连接电脑启动）
+- **本 App 试音**：独立保存输入、输出选择；播放 1 秒测试音，或录音 4 秒后回放。显示系统报告的设备；蓝牙麦试音会临时建立通话音频，录完释放链路，再使用媒体输出回放。录音结束后立即释放麦克风，PCM 直接交给 AudioTrack 回放，播放前绑定所选设备。蓝牙通话输出也会临时建立并释放通信链路。
+- **设备列表**：设备插拔自动更新，区分手机不同麦克风、扬声器、听筒、蓝牙 A2DP/SCO/LE、有线、USB 与 HDMI 设备。设备断开时保留选择并提示，不会静默改用其他设备。
+- **全局策略（需 Shizuku）**：请求媒体使用扬声器、蓝牙 A2DP 或自动；录音使用蓝牙 SCO 或自动。Android 12+ 通过系统媒体首选设备切换输出并读回设备；恢复自动还原切换前的首选设置。录音策略与旧系统媒体策略使用 `AudioSystem.getForceUse` 读回。Android 13+ 另查预计媒体设备，试音期间持续读取实际输出。
+- **通话设备请求**：Android 12+ 使用 `setCommunicationDevice` / `clearCommunicationDevice`；旧版本使用兼容 API。此请求可能被正在通话的其他 App 或系统覆盖。
+- **本地 API + CLI**：仅监听手机 `127.0.0.1:8767`；CLI 为指定 adb 设备分配独立本机转发端口，并绕过 HTTP 代理。
 
-## 构建
+**首页“声音输出”直接应用系统媒体切换，选择成功后本 App 回放也随之切换。** “声音输入”仍用于本 App 录音；底部“本 App 回放设备（高级）”和 CLI 的 `select-output` 只覆盖本 App 播放。媒体输出选择当前连接的扬声器或 A2DP 耳机。全局请求的作用范围是媒体，其他 App 自己指定的路由仍可能优先。蓝牙 SCO 麦克风需要建立通话音频链路，单独写入录音策略不能保证其他 App 建链。系统策略读回一致也不证明其他 App 的声音已经使用该设备；厂商策略、设备连接状态和其他 App 的显式路由都可能影响结果。
 
-```bash
-./gradlew :app:assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
+目前不提供可靠的“任意 App 手机麦收音 + 蓝牙耳机出声”全局保证；恢复自动策略也不等于强制使用手机麦克风。SCO、A2DP、LE Audio 是不同链路，需要用实际设备验证。Android 12+ 全局媒体会话在声路进程退出时恢复原设置；若 Shizuku 用户服务被强制杀死，下次连接会根据本地恢复记录撤销本次设置。恢复时保留其他程序后来改动的设备。设备插拔或其他程序改动策略后，请点击“刷新系统策略”或使用 `refresh`。
 
-要求：Android Gradle Plugin 8.7+、Kotlin 2.x、compileSdk 36、minSdk 26。
+## 界面使用
 
-## CLI 用法
+首页“声音输出”里的“手机扬声器 / 蓝牙耳机 / 跟随系统”会立即提交全局媒体请求，需要 Shizuku。切换成功后清除本 App 的回放覆盖，让测试音和录音回放跟随同一媒体路由；输入选择保持不变。切换失败会显示原因，并按系统读回显示选中项。
 
-手机连接 USB 后（App 在前台运行）：
+“播放测试音 · 验证当前媒体输出”始终使用当前全局媒体路由。只想单独测试听筒、蓝牙通话或其他输出，可展开底部“本 App 回放设备（高级）”。系统设备报告与实际发声位置是不同证据；1.2.3 前的测试计数只证明软件流程和路由报告，不能代替实听。
+
+## 构建与验证
+
+要求 JDK 17+、Android SDK 36。项目固定使用 AGP 8.13.2、Gradle 8.13、Kotlin 2.3.21，支持 Android 8.0（API 26）及以上。
 
 ```bash
-python3 tools/audioroute-cli.py devices          # 列出输入/输出设备（✓ 标当前选择）
-python3 tools/audioroute-cli.py select-output t8:aXX...   # 选择输出设备（本 App 试音用）
-python3 tools/audioroute-cli.py test beep        # 播放测试音
-python3 tools/audioroute-cli.py media speaker    # 全局：媒体强制扬声器
-python3 tools/audioroute-cli.py media bt_a2dp    # 全局：媒体强制蓝牙耳机
-python3 tools/audioroute-cli.py record bt_sco    # 全局：录音强制蓝牙麦克风
-python3 tools/audioroute-cli.py media none       # 恢复自动
-python3 tools/audioroute-cli.py call on          # 通话走扬声器（免 Shizuku）
-python3 tools/audioroute-cli.py status           # 查看状态
+./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
+python3 -m unittest discover -s tools/tests -v
+adb -s <手机序列号> install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s <手机序列号> shell am start -n com.halo.audioroute/.MainActivity
 ```
 
-多设备用 `--serial <序列号>` 指定。
+Java/Gradle 不一定自动读取 macOS 系统代理。如果下载依赖超时，可显式传入代理地址（下面端口仅为示例，按本机代理修改）：
+
+```bash
+./gradlew -Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=7897 \
+  -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7897 :app:assembleDebug
+```
+
+运行依赖安装在本机的 `adb` 和 Python 3.9+。首次使用全局策略，需要在手机上启动 [Shizuku](https://shizuku.rikka.app/) 并授权声路。手机重启后通常需重新启动 Shizuku。
+
+## CLI
+
+App 进程运行期间可用 API；后台存活由 Android 管理。多设备连接时必须指定 `--serial`，或设置 `ANDROID_SERIAL`。
+
+```bash
+python3 tools/audioroute-cli.py --serial <手机序列号> devices
+python3 tools/audioroute-cli.py --serial <手机序列号> select-input builtin
+python3 tools/audioroute-cli.py --serial <手机序列号> select-output speaker
+python3 tools/audioroute-cli.py --serial <手机序列号> test record
+python3 tools/audioroute-cli.py --serial <手机序列号> media speaker
+python3 tools/audioroute-cli.py --serial <手机序列号> media none
+python3 tools/audioroute-cli.py --serial <手机序列号> refresh
+```
+
+`test record` 需要先在手机上授予录音权限；CLI 等待试音结束并输出实际设备与错误信息。全局策略同步返回系统读回结果；失败返回非零退出码，设置操作不会自动重试。
+
+更多命令、API 格式和设备回归测试见 [tools/README.md](tools/README.md)。
 
 ## 项目结构
 
-```
+```text
 app/src/main/java/com/halo/audioroute/
-├── MainActivity.kt       # Material3 UI + Shizuku 授权流
-├── RouteState.kt         # 核心：设备枚举/选择/试音/全局路由（Application 级单例）
-├── AudioForceService.kt  # Shizuku UserService：反射 setForceUse（运行在 shell 进程）
-└── AudioApiServer.kt     # 本地控制服务器（NanoHTTPD, 127.0.0.1:8767）
+├── MainActivity.kt       # Material 3 UI，与 CLI 共用可观察状态
+├── RouteState.kt         # 设备/选择/试音/连接管理与有超时的特权调用
+├── PcmWav.kt             # 标准 16-bit mono WAV 编码
+├── MediaRouteVerification.kt # 核对请求的媒体设备类别与观测路由
+├── MediaRouteLease.kt   # 媒体首选设备的保存、恢复与外部更改保护
+├── SystemMediaRouter.kt # Shizuku 中的系统媒体首选设备接口
+├── AudioForceService.kt  # Shizuku shell UserService
+└── AudioApiServer.kt     # NanoHTTPD loopback API
+app/src/test/             # 输出核验、媒体设置恢复、WAV 格式回归测试
 tools/
-└── audioroute-cli.py     # Python CLI
+├── audioroute-cli.py     # Python CLI
+├── device-smoke.py       # 真机 API 回归（临时操作后恢复设置）
+├── output-smoke.py       # 逐个输出设备与全局媒体回归
+└── tests/                # 转发、代理、失败处理回归测试
 ```
 
-## 开发踩坑记录
-
-- `AudioSystem` 是 `@hide` 类，编译期不可见，必须运行期反射
-- Shizuku `UserServiceArgs` 必须设置 `processNameSuffix`，否则 NPE
-- Shizuku 的 binder 推送可能晚于 App 首次 bind：必须注册 `addBinderReceivedListener` 重绑
-- ServiceConnection 必须挂在 Application 级对象上，挂 Activity 会因旋转/重建被 unbind
-- UserService 进程被杀后 binder 调用会无限挂起：调用需独立线程 + 看门狗
-- App 内建本地服务器别忘了 `INTERNET` 权限（否则 ServerSocket 直接 EPERM）
+开发接管记录与验证边界见 [DEVELOPMENT.md](DEVELOPMENT.md)。
 
 ## License
 

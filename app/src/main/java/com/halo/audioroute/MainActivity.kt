@@ -1,16 +1,16 @@
 package com.halo.audioroute
 
 import android.Manifest
-import android.content.ComponentName
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -32,7 +33,7 @@ import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Usb
-import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -45,6 +46,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
@@ -59,33 +62,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import rikka.shizuku.Shizuku
-import rikka.shizuku.ShizukuBinderWrapper
 
 class MainActivity : ComponentActivity() {
 
-    companion object {
-        private const val SHIZUKU_REQ = 7001
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         RouteState.init(this)
-        Shizuku.addRequestPermissionResultListener { requestCode, grantResult ->
-            if (requestCode == SHIZUKU_REQ && grantResult == PackageManager.PERMISSION_GRANTED) {
-                RouteState.bindShizuku(applicationContext)
-            }
-        }
-        // server 的 binder 推送常晚于本进程的首次 bind 尝试：收到推送时必须重新绑定
-        Shizuku.addBinderReceivedListener {
-            RouteState.bindShizuku(applicationContext)
-        }
         RouteState.bindShizuku(applicationContext)
         ApiServerHolder.start(this)
         setContent { App() }
@@ -93,15 +83,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
-            RouteState.bindShizuku(applicationContext)
-        }
+        RouteState.bindShizuku(applicationContext)
     }
+
 }
 
 
 object ApiServerHolder {
     @Volatile private var server: AudioApiServer? = null
+    @Synchronized
     fun start(context: android.content.Context) {
         if (server != null) return
         val s = AudioApiServer(context.applicationContext)
@@ -119,7 +109,7 @@ private fun App() {
     val scheme = if (Build.VERSION.SDK_INT >= 31) {
         if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
     } else {
-        MaterialTheme.colorScheme
+        if (dark) darkColorScheme() else lightColorScheme()
     }
     androidx.compose.material3.MaterialTheme(colorScheme = scheme) {
         Scaffold(
@@ -129,7 +119,7 @@ private fun App() {
                     title = {
                         Column {
                             Text("声路", fontWeight = FontWeight.Bold, fontSize = 24.sp)
-                            Text("输入输出路由 · 全局生效", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("本 App 试音 · 系统路由策略", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     },
                     actions = {
@@ -154,9 +144,10 @@ private fun App() {
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 ShizukuCard()
-                OutputCard()
                 InputCard()
+                OutputCard()
                 GlobalCard()
+                PlaybackSettings()
                 Spacer(Modifier.height(12.dp))
             }
         }
@@ -172,7 +163,7 @@ private fun deviceIcon(type: Int): ImageVector = when (type) {
     android.media.AudioDeviceInfo.TYPE_USB_DEVICE,
     android.media.AudioDeviceInfo.TYPE_USB_HEADSET -> Icons.Filled.Usb
     android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> Icons.Filled.Speaker
-    else -> Icons.Filled.VolumeUp
+    else -> Icons.AutoMirrored.Filled.VolumeUp
 }
 
 @Composable
@@ -194,11 +185,12 @@ private fun SectionCard(title: String, subtitle: String? = null, content: @Compo
 }
 
 @Composable
-private fun DeviceRow(name: String, icon: ImageVector, selected: Boolean, onClick: () -> Unit) {
+private fun DeviceRow(name: String, icon: ImageVector, selected: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
+            .heightIn(min = 48.dp)
             .background(
                 if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
                 RoundedCornerShape(14.dp)
@@ -218,7 +210,6 @@ private fun DeviceRow(name: String, icon: ImageVector, selected: Boolean, onClic
 private fun ShizukuCard() {
     val context = LocalContext.current
     val connected = RouteState.connectedState.value
-    val bindError = RouteState.bindError
     SectionCard(
         "Shizuku",
         "全局路由需要 Shizuku（无线调试/ADB 启动）。应用商店或 GitHub RikkaApps/Shizuku 获取"
@@ -230,10 +221,10 @@ private fun ShizukuCard() {
                 color = if (connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                 fontWeight = FontWeight.Bold
             )
-            TextButton(onClick = {
-                runCatching { Shizuku.requestPermission(7001) }
-                    .onFailure { RouteState.bindShizuku(context.applicationContext) }
-            }) { Text("连接 / 授权") }
+            TextButton(onClick = { RouteState.requestShizuku(context) }) { Text("连接 / 授权") }
+        }
+        if (RouteState.bindError.isNotBlank()) {
+            Text(RouteState.bindError, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -241,96 +232,177 @@ private fun ShizukuCard() {
 @Composable
 private fun OutputCard() {
     val context = LocalContext.current
-    var sel by remember { mutableStateOf(RouteState.selectedOutputKey ?: "auto") }
-    val outputs = RouteState.outputDevices(context)
-    SectionCard("声音输出", "试音与选择；其他 App 的输出请用全局路由") {
-        DeviceRow("跟随系统", Icons.Filled.VolumeUp, sel == "auto") { sel = "auto"; RouteState.selectOutput(context, "auto") }
-        outputs.forEach { d ->
-            val k = RouteState.key(d)
-            DeviceRow(RouteState.label(d), deviceIcon(d.type), sel == k) { sel = k; RouteState.selectOutput(context, k) }
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<RouteState.ForceResult?>(null) }
+    val strategy = RouteState.forceState.mediaStrategy
+    val media = if (strategy?.optBoolean("supported") == true) {
+        if (!strategy.optBoolean("active")) RouteState.FORCE_NONE
+        else when (strategy.optJSONArray("preferred_devices")?.optJSONObject(0)?.optInt("type")) {
+            2 -> RouteState.FORCE_SPEAKER
+            8 -> RouteState.FORCE_BT_A2DP
+            else -> null
         }
-        Spacer(Modifier.height(6.dp))
-        TextButton(onClick = { RouteState.beep(context) }) {
-            Icon(Icons.Filled.VolumeUp, contentDescription = null, modifier = Modifier.size(18.dp))
+    } else RouteState.forceState.values[RouteState.FOR_MEDIA]
+    val available = RouteState.connectedState.value && !busy && !RouteState.forceBusy && !RouteState.testState.running
+    val bluetooth = RouteState.outputs.firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
+
+    fun apply(force: Int) {
+        if (!available) return
+        busy = true
+        result = null
+        scope.launch {
+            try { result = withContext(Dispatchers.IO) { RouteState.chooseMediaOutput(context, force) } }
+            finally { busy = false }
+        }
+    }
+
+    SectionCard("声音输出", "选择后立即切换媒体输出，适用于声路及使用系统默认输出的音乐、视频等 App") {
+        DeviceRow("手机扬声器", Icons.Filled.Speaker, media == RouteState.FORCE_SPEAKER, enabled = available) {
+            apply(RouteState.FORCE_SPEAKER)
+        }
+        DeviceRow(bluetooth?.let { "${RouteState.label(it)} · 蓝牙耳机" } ?: "蓝牙耳机（未连接）",
+            Icons.Filled.Bluetooth, media == RouteState.FORCE_BT_A2DP, enabled = available && bluetooth != null) {
+            apply(RouteState.FORCE_BT_A2DP)
+        }
+        DeviceRow("跟随系统 · 恢复原设置", Icons.AutoMirrored.Filled.VolumeUp, media == RouteState.FORCE_NONE, enabled = available) {
+            apply(RouteState.FORCE_NONE)
+        }
+        if (!RouteState.connectedState.value) Text("请先连接并授权 Shizuku，才能切换媒体输出", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+        if (busy) Text("正在应用输出选择…", fontSize = 12.sp)
+        result?.let { state ->
+            Text(if (state.ok) "系统已接受输出选择，请以实际声音确认" else state.message, fontSize = 12.sp,
+                color = if (state.ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
+        }
+        RouteState.forceState.mediaDevices?.let { devices ->
+            Text("系统预计输出：${devices.joinToString { it.name }.ifBlank { "未知" }}", fontSize = 12.sp)
+        }
+        TextButton(enabled = !busy && !RouteState.testState.running, onClick = {
+            RouteState.startTest(context, "beep", followMediaOutput = true)
+        }) { Text("播放测试音 · 验证当前媒体输出") }
+        if (RouteState.testState.kind == "beep") TestResult()
+    }
+}
+
+@Composable
+private fun PlaybackSettings() {
+    var expanded by remember { mutableStateOf(false) }
+    TextButton(onClick = { expanded = !expanded }) {
+        Text(if (expanded) "收起本 App 回放设备设置" else "本 App 回放设备（高级）")
+    }
+    if (expanded) PlaybackOutputCard()
+}
+
+@Composable
+private fun PlaybackOutputCard() {
+    val context = LocalContext.current
+    val sel = RouteState.selectedOutputKey ?: "auto"
+    val outputs = RouteState.outputDevices(context)
+    SectionCard("本 App 回放设备", "单独覆盖声路的测试音和录音回放；不改变其他 App 的媒体输出") {
+        DeviceRow("跟随系统", Icons.AutoMirrored.Filled.VolumeUp, sel == "auto") { RouteState.selectOutput(context, null) }
+        outputs.forEach { d ->
+            val key = RouteState.key(d)
+            DeviceRow(RouteState.displayLabel(d), deviceIcon(d.type), sel == key || (sel == "speaker" && d.type == 2)) {
+                runCatching { RouteState.selectOutput(context, key) }
+            }
+        }
+        if (sel !in setOf("auto", "speaker") && outputs.none { RouteState.key(it) == sel }) {
+            Text("所选输出已断开：$sel", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+        }
+        TextButton(enabled = !RouteState.testState.running, onClick = { RouteState.startTest(context, "beep") }) {
+            Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, modifier = Modifier.size(18.dp))
             Text("  播放测试音到选中输出")
         }
+        if (RouteState.testState.kind == "beep") TestResult()
     }
 }
 
 @Composable
 private fun InputCard() {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var sel by remember { mutableStateOf(RouteState.selectedInputKey ?: "builtin") }
-    var status by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
+    val sel = RouteState.selectedInputKey ?: "auto"
+    var permissionMessage by remember { mutableStateOf("") }
     val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) status = "权限已授，可录音"
+        permissionMessage = if (granted) "" else "未授予录音权限"
+        if (granted) RouteState.startTest(context, "record")
     }
     val inputs = RouteState.inputDevices(context)
-    SectionCard("声音输入", "录音并回放以验证") {
-        DeviceRow("手机麦克风", Icons.Filled.Mic, sel == "builtin") { sel = "builtin"; RouteState.selectInput(context, "builtin") }
+    val test = RouteState.testState
+    SectionCard("声音输入", "选择仅用于本 App 录音；试音显示系统报告的实际设备") {
+        DeviceRow("跟随系统", Icons.Filled.Mic, sel == "auto") { RouteState.selectInput(context, null) }
+        DeviceRow("手机麦克风", Icons.Filled.Mic, sel == "builtin") { RouteState.selectInput(context, "builtin") }
         inputs.forEach { d ->
-            val k = RouteState.key(d)
-            DeviceRow(RouteState.label(d), deviceIcon(d.type), sel == k) { sel = k; RouteState.selectInput(context, k) }
+            val key = RouteState.key(d)
+            DeviceRow(RouteState.displayLabel(d), deviceIcon(d.type), sel == key) {
+                runCatching { RouteState.selectInput(context, key) }
+            }
         }
-        Spacer(Modifier.height(6.dp))
-        TextButton(onClick = {
+        if (sel !in setOf("auto", "builtin") && inputs.none { RouteState.key(it) == sel }) {
+            Text("所选输入已断开：$sel", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+        }
+        TextButton(enabled = !test.running, onClick = {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 micPerm.launch(Manifest.permission.RECORD_AUDIO)
-                return@TextButton
-            }
-            if (busy) return@TextButton
-            busy = true
-            status = "录音中 4 秒…"
-            scope.launch {
-                val pcm = withContext(Dispatchers.IO) { RouteState.recordTest(context) }
-                status = "回放录音…"
-                withContext(Dispatchers.IO) { RouteState.playPcm(context, pcm) }
-                status = "试音完成"
-                busy = false
-            }
-        }) { Text(if (busy) "录音中…" else "● 按选中输入录 4 秒并回放") }
-        if (status.isNotBlank()) Text(status, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else RouteState.startTest(context, "record")
+        }) { Text(if (test.running) "试音中…" else "● 录 4 秒并回放") }
+        if (permissionMessage.isNotBlank()) Text(permissionMessage, color = MaterialTheme.colorScheme.error)
+        if (test.kind == "record") TestResult()
     }
 }
 
 @Composable
+private fun TestResult() {
+    val test = RouteState.testState
+    if (test.message.isNotBlank()) Text(test.message, fontSize = 12.sp,
+        color = if (test.ok == false) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+    if (test.input != null) Text("录音设备：${RouteState.routedLabel(test.input)}", fontSize = 12.sp)
+    if (test.outputs.isNotEmpty()) Text("系统报告输出：${test.outputs.joinToString { RouteState.routedLabel(it) }}", fontSize = 12.sp)
+    else if (test.output != null) Text("系统报告输出：${RouteState.routedLabel(test.output)}", fontSize = 12.sp)
+}
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
 private fun GlobalCard() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var status by remember { mutableStateOf("") }
-    var callSpeaker by remember { mutableStateOf(false) }
-
-    fun doForce(usage: Int, force: Int, label: String) {
+    var busy by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<RouteState.ForceResult?>(null) }
+    val connected = RouteState.connectedState.value
+    val force = RouteState.forceState.values
+    fun doForce(usage: Int, value: Int) {
+        if (busy) return
+        busy = true
         scope.launch {
-            val (ok, msg) = withContext(Dispatchers.IO) { RouteState.setForceUse(usage, force) }
-            status = "$label：${if (ok) "✓ 已生效" else "✗ $msg"}"
+            try { result = withContext(Dispatchers.IO) { RouteState.setForceUse(usage, value) } }
+            finally { busy = false }
         }
     }
 
-    SectionCard("全局路由 · 影响所有 App", "经 Shizuku 强制系统级音频路由；插拔设备/重启后需重新应用") {
-        Text("媒体输出（音乐、视频、游戏）", fontWeight = FontWeight.Bold)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 6.dp)) {
-            FilterChip(selected = false, onClick = { doForce(RouteState.FOR_MEDIA, RouteState.FORCE_SPEAKER, "媒体→扬声器") }, label = { Text("强制扬声器") })
-            FilterChip(selected = false, onClick = { doForce(RouteState.FOR_MEDIA, RouteState.FORCE_BT_A2DP, "媒体→蓝牙耳机") }, label = { Text("强制蓝牙耳机") })
-            FilterChip(selected = false, onClick = { doForce(RouteState.FOR_MEDIA, RouteState.FORCE_NONE, "媒体→自动") }, label = { Text("恢复自动") })
+    SectionCard("其他 App 的录音与通话", "录音策略不代表其他 App 已建立蓝牙麦链路；通话请求可能被正在通话的 App 覆盖") {
+        Text("录音输入（其他 App）", fontWeight = FontWeight.Bold)
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(enabled = connected && !busy, selected = force[RouteState.FOR_RECORD] == RouteState.FORCE_BT_SCO,
+                onClick = { doForce(RouteState.FOR_RECORD, RouteState.FORCE_BT_SCO) }, label = { Text("蓝牙麦克风策略") })
+            FilterChip(enabled = connected && !busy, selected = force[RouteState.FOR_RECORD] == RouteState.FORCE_NONE,
+                onClick = { doForce(RouteState.FOR_RECORD, RouteState.FORCE_NONE) }, label = { Text("恢复自动") })
         }
-        Text("录音输入（其他 App 的录音）", fontWeight = FontWeight.Bold)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 6.dp)) {
-            FilterChip(selected = false, onClick = { doForce(RouteState.FOR_RECORD, RouteState.FORCE_BT_SCO, "录音→蓝牙麦克风") }, label = { Text("强制蓝牙麦克风") })
-            FilterChip(selected = false, onClick = { doForce(RouteState.FOR_RECORD, RouteState.FORCE_NONE, "录音→自动") }, label = { Text("恢复自动") })
-        }
+        TextButton(enabled = connected && !busy, onClick = {
+            busy = true
+            scope.launch {
+                try { result = withContext(Dispatchers.IO) { RouteState.refreshForceState() } }
+                finally { busy = false }
+            }
+        }) { Text(if (busy) "正在查询 / 设置…" else "刷新系统策略") }
+        if (RouteState.forceState.checkedAt == null) Text("系统策略尚未读回", fontSize = 12.sp)
+        result?.let { state -> Text(
+            (if (state.ok) "" else "失败：") + state.message, fontSize = 12.sp,
+            color = if (state.ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error) }
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
-            Text("通话 / 语音聊天走扬声器（免 Shizuku）", Modifier.weight(1f), fontSize = 14.sp)
-            Switch(checked = callSpeaker, onCheckedChange = {
-                callSpeaker = it
-                context.getSystemService(android.media.AudioManager::class.java).isSpeakerphoneOn = it
-                status = if (it) "通话已切到扬声器" else "通话已恢复"
+            Text("请求通话扬声器（免 Shizuku，通话 App 可能覆盖）", Modifier.weight(1f), fontSize = 14.sp)
+            Switch(enabled = !RouteState.testState.running, checked = RouteState.callSpeakerRequested, onCheckedChange = { enabled ->
+                RouteState.setCallSpeaker(context, enabled)
             })
         }
-        if (status.isNotBlank()) {
-            Text(status, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        if (RouteState.callResult.isNotBlank()) Text(RouteState.callResult, fontSize = 12.sp)
     }
 }
